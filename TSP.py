@@ -2,85 +2,118 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 
+from Carga import Carga
+from Veiculo import Veiculo
+
 plt.ion() 
-
 # ---------------------------
-# 1. Gerar cidades aleatórias
+# GERAR DADOS
 # ---------------------------
-def gerar_cidades(n):
-    return np.random.rand(n, 2) * 100
+def gerar_cargas(n):
+    cargas = []
+    for i in range(n):
+        cargas.append(
+            Carga(
+                id=i,
+                demanda=0 if i == 0 else np.random.randint(1, 6),
+                x=np.random.rand() * 100,
+                y=np.random.rand() * 100
+            )
+        )
+    return cargas
 
 
-def dividir_rotas(individuo, n_veiculos):
-    return np.array_split(individuo, n_veiculos)
-
-# ---------------------------
-# 2. Distância entre cidades
-# ---------------------------
-def distancia(a, b):
-    return np.linalg.norm(a - b)
-
-
-def distancia_total(rota, cidades):
-    total = 0
-    for i in range(len(rota)):
-        cidade_a = cidades[rota[i]]
-        cidade_b = cidades[rota[(i + 1) % len(rota)]]
-        total += distancia(cidade_a, cidade_b)
-    return total
-
-
-def distancia_total_veiculos(individuo, cidades, n_veiculos):
-    rotas = dividir_rotas(individuo, n_veiculos)
-    total = 0
-
-    for rota in rotas:
-        if len(rota) == 0:
-            continue
-
-        rota = list(rota)
-        rota_completa = [0] + rota + [0]
-
-        for i in range(len(rota_completa) - 1):
-            a = cidades[rota_completa[i]]
-            b = cidades[rota_completa[i + 1]]
-            total += distancia(a, b)
-
-    return total
+def gerar_veiculos(n):
+    return [Veiculo(id=i, capacidade_max=15) for i in range(n)]
 
 
 # ---------------------------
-# 3. População inicial
+# DISTÂNCIA
 # ---------------------------
-def criar_populacao(tamanho, n_cidades):
+def distancia_cargas(a: Carga, b: Carga):
+    return np.linalg.norm([a.x - b.x, a.y - b.y])
+
+
+# ---------------------------
+# POPULAÇÃO
+# ---------------------------
+def criar_populacao(tamanho, n_cargas):
+    base = list(range(n_cargas))
     populacao = []
-    base = list(range(n_cidades))
+
     for _ in range(tamanho):
-        individuo = base.copy()
-        random.shuffle(individuo)
-        populacao.append(individuo)
+        ind = base.copy()
+        random.shuffle(ind)
+        populacao.append(ind)
+
     return populacao
 
 
 # ---------------------------
-# 4. Fitness
+# DIVIDIR ROTAS (VRP)
 # ---------------------------
-def fitness(individuo, cidades, n_veiculos):
-    return 1 / distancia_total_veiculos(individuo, cidades, n_veiculos)
+def dividir_rotas(individuo, n_veiculos):
+    return np.array_split(individuo, n_veiculos)
 
 
 # ---------------------------
-# 5. Seleção (roleta)
+# FUNÇÃO OBJETIVO
 # ---------------------------
-def selecao(populacao, cidades, n_veiculos):
-    fitnesses = [fitness(ind, cidades, n_veiculos) for ind in populacao]
+def distancia_total_veiculos(individuo, cargas, veiculos):
+    rotas = dividir_rotas(individuo, len(veiculos))
+
+    total_distancia = 0
+    penalidade = 0
+
+    for i, rota in enumerate(rotas):
+        if len(rota) == 0:
+            continue
+
+        veiculo = veiculos[i]
+        carga_total = 0
+
+        rota = list(rota)
+        rota_completa = [0] + rota + [0]
+
+        # soma carga
+        for cid in rota:
+            carga_total += cargas[cid].demanda
+
+        # penalidade de capacidade
+        if carga_total > veiculo.capacidade_max:
+            penalidade += (carga_total - veiculo.capacidade_max) * 100
+
+        # distância
+        for j in range(len(rota_completa) - 1):
+            a = cargas[rota_completa[j]]
+            b = cargas[rota_completa[j + 1]]
+
+            total_distancia += distancia_cargas(a, b) * veiculo.custo_por_km
+
+    return total_distancia + penalidade
+
+
+# ---------------------------
+# FITNESS
+# ---------------------------
+def fitness(individuo, cargas, veiculos):
+    return 1 / distancia_total_veiculos(individuo, cargas, veiculos)
+
+
+# ---------------------------
+# SELEÇÃO (ROULETTE)
+# ---------------------------
+def selecao(populacao, cargas, veiculos):
+    fitnesses = [fitness(ind, cargas, veiculos) for ind in populacao]
     total = sum(fitnesses)
     probs = [f / total for f in fitnesses]
-    return populacao[np.random.choice(len(populacao), p=probs)]
+
+    idx = np.random.choice(len(populacao), p=probs)
+    return populacao[idx]
 
 
 # ---------------------------
-# 6. Crossover (Order Crossover)
+# CROSSOVER (OX)
 # ---------------------------
 def crossover(pai1, pai2):
     size = len(pai1)
@@ -101,9 +134,9 @@ def crossover(pai1, pai2):
 
 
 # ---------------------------
-# 7. Mutação (swap)
+# MUTAÇÃO
 # ---------------------------
-def mutacao(individuo, taxa=0.01):
+def mutacao(individuo, taxa=0.02):
     for i in range(len(individuo)):
         if random.random() < taxa:
             j = random.randint(0, len(individuo) - 1)
@@ -112,14 +145,18 @@ def mutacao(individuo, taxa=0.01):
 
 
 # ---------------------------
-# 8. Evolução
+# EVOLUÇÃO
 # ---------------------------
-def evoluir(populacao, cidades, taxa_mutacao, n_veiculos):
+def evoluir(populacao, cargas, taxa_mutacao, veiculos):
     nova_pop = []
 
-    for _ in range(len(populacao)):
-        pai1 = selecao(populacao, cidades, n_veiculos)
-        pai2 = selecao(populacao, cidades, n_veiculos)
+    # elitismo (mantém melhor)
+    melhor = min(populacao, key=lambda ind: distancia_total_veiculos(ind, cargas, veiculos))
+    nova_pop.append(melhor)
+
+    while len(nova_pop) < len(populacao):
+        pai1 = selecao(populacao, cargas, veiculos)
+        pai2 = selecao(populacao, cargas, veiculos)
 
         filho = crossover(pai1, pai2)
         filho = mutacao(filho, taxa_mutacao)
@@ -130,85 +167,78 @@ def evoluir(populacao, cidades, taxa_mutacao, n_veiculos):
 
 
 # ---------------------------
-# 9. Plotar rota
+# PLOT
 # ---------------------------
-def plotar_rota(rota, cidades, titulo="Rota"):
-    pontos = cidades[rota + [rota[0]]]
-    plt.plot(pontos[:, 0], pontos[:, 1], marker='o')
-    plt.title(titulo)
-    plt.show()
-
-
-# ---------------------------
-# 9. Plotar rota e evolução
-# ---------------------------
-def plotar_evolucao(melhor_global, melhor_geracao, cidades, geracao, n_veiculos):
+def plotar_evolucao(melhor_global, melhor_geracao, cargas, veiculos, geracao):
     plt.clf()
-
     cores = ['b', 'g', 'c', 'm', 'y']
 
-    # Melhor global (linhas sólidas)
-    rotas = dividir_rotas(melhor_global, n_veiculos)
-    for i, rota in enumerate(rotas):
-        rota = list(rota)
-        if not rota:
-            continue
+    def plotar(individuo, estilo):
+        rotas = dividir_rotas(individuo, len(veiculos))
 
-        completa = [0] + rota + [0]
-        pontos = cidades[completa]
-        plt.plot(pontos[:, 0], pontos[:, 1], cores[i % len(cores)], label=f"Global V{i}")
+        for i, rota in enumerate(rotas):
+            if len(rota) == 0:
+                continue
 
-    # Melhor da geração (tracejado)
-    rotas = dividir_rotas(melhor_geracao, n_veiculos)
-    for i, rota in enumerate(rotas):
-        rota = list(rota)
-        if not rota:
-            continue
+            completa = [0] + list(rota) + [0]
+            xs = [cargas[c].x for c in completa]
+            ys = [cargas[c].y for c in completa]
 
-        completa = [0] + rota + [0]
-        pontos = cidades[completa]
-        plt.plot(pontos[:, 0], pontos[:, 1], cores[i % len(cores)] + '--')
+            plt.plot(xs, ys, cores[i % len(cores)] + estilo)
+
+    plotar(melhor_global, '-')   # melhor global
+    plotar(melhor_geracao, '--') # geração atual
 
     plt.title(f"Geração {geracao}")
-    plt.legend()
     plt.pause(0.01)
 
 
 # ---------------------------
-# 10. Execução principal
+# MAIN
 # ---------------------------
 def main():
-    n_cidades = 20
-    n_veiculos = 2
-    geracoes = 200
+    plt.ion()
+
+    n_cargas = 20
+    n_veiculos = 3
+    geracoes = 60
     tamanho_pop = 100
     taxa_mutacao = 0.5
 
-    cidades = gerar_cidades(n_cidades)
+    cargas = gerar_cargas(n_cargas)
+    veiculos = gerar_veiculos(n_veiculos)
 
-    # cidade 0 = depósito → não entra na população
-    populacao = criar_populacao(tamanho_pop, n_cidades)
+    populacao = criar_populacao(tamanho_pop, n_cargas)
+
+    # remove depósito da população
     populacao = [ind[1:] for ind in populacao]
 
-    melhor_global = min(populacao, key=lambda ind: distancia_total_veiculos(ind, cidades, n_veiculos))
+    melhor_global = min(
+        populacao,
+        key=lambda ind: distancia_total_veiculos(ind, cargas, veiculos)
+    )
 
     for g in range(geracoes):
-        populacao = evoluir(populacao, cidades, taxa_mutacao, n_veiculos)
+        populacao = evoluir(populacao, cargas, taxa_mutacao, veiculos)
 
-        melhor_geracao = min(populacao, key=lambda ind: distancia_total_veiculos(ind, cidades, n_veiculos))
+        melhor_geracao = min(
+            populacao,
+            key=lambda ind: distancia_total_veiculos(ind, cargas, veiculos)
+        )
 
-        if distancia_total_veiculos(melhor_geracao, cidades, n_veiculos) < distancia_total_veiculos(melhor_global, cidades, n_veiculos):
+        if distancia_total_veiculos(melhor_geracao, cargas, veiculos) < \
+           distancia_total_veiculos(melhor_global, cargas, veiculos):
             melhor_global = melhor_geracao
 
-        print(f"Geração {g} | Atual: {distancia_total_veiculos(melhor_geracao, cidades, n_veiculos):.2f} | Melhor: {distancia_total_veiculos(melhor_global, cidades, n_veiculos):.2f}")
+        print(f"Geração {g} | Atual: {distancia_total_veiculos(melhor_geracao, cargas, veiculos):.2f} | Melhor: {distancia_total_veiculos(melhor_global, cargas, veiculos):.2f}")
 
-        plotar_evolucao(melhor_global, melhor_geracao, cidades, g, n_veiculos)
+        plotar_evolucao(melhor_global, melhor_geracao, cargas, veiculos, g)
 
     plt.ioff()
     plt.show()
 
-    print("\nMelhor rota final:", melhor_global)
-    print("Distância final:", distancia_total(melhor_global, cidades))
+    print("\nMelhor solução:", melhor_global)
+    print("Distância final:", distancia_total_veiculos(melhor_global, cargas, veiculos))
 
 
 if __name__ == "__main__":
