@@ -46,7 +46,7 @@ pip install -r requirements.txt
 
 Veja o projeto em execução no vídeo abaixo:
 
-[Vídeo de demonstração no YouTube](https://youtu.be/)
+[Vídeo de demonstração no YouTube](https://youtu.be/C9yVIupOooE)
 
 
 
