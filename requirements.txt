@@ -1,0 +1,6 @@
+dash
+plotly
+requests
+numpy
+matplotlib
+python-dotenv
